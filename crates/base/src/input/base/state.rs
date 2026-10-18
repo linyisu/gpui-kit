@@ -3544,6 +3544,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub(crate) fn show_cursor(&self, window: &Window, cx: &App) -> bool {
         (self.focus_handle.is_focused(window) || M::is_context_menu_open(self, cx))
             && !self.disabled
+            && !(M::CODE_EDITOR && self.readonly)
             && self.blink_cursor.read(cx).visible()
             && window.is_window_active()
     }
@@ -8700,6 +8701,29 @@ mod tests {
                 assert!(state.blink_cursor.read(cx).visible());
             });
         }
+    }
+
+    #[gpui::test]
+    fn readonly_editor_hides_caret_without_disabling_selection_and_copy(cx: &mut TestAppContext) {
+        let view = InputView::<EditorMode>::new(cx);
+        let mut cx = VisualTestContext::from_window(view.window_handle.into(), cx);
+        setup_cursors(&mut cx, &view.input, "generated| log");
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            view.input.update(cx, |state, cx| {
+                state.focus(window, cx);
+                assert!(state.show_cursor(window, cx));
+                state.set_readonly(true, cx);
+                state.set_selected_range(0..9, cx);
+                state.copy(&Copy, window, cx);
+                assert!(!state.show_cursor(window, cx));
+                assert!(!state.disabled);
+                assert_eq!(state.selected_range(), 0..9);
+                assert_eq!(state.value(), "generated log\n");
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "generated");
+            });
+        });
     }
 
     #[gpui::test]
