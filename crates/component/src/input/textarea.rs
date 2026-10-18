@@ -19,6 +19,7 @@ pub struct Textarea {
     style: StyleRefinement,
     size: Size,
     height: Option<DefiniteLength>,
+    content_padding: Option<gpui::Edges<gpui::Pixels>>,
     appearance: bool,
     bordered: bool,
     disabled: bool,
@@ -73,6 +74,7 @@ impl Textarea {
             style: StyleRefinement::default(),
             size: Size::default(),
             height: None,
+            content_padding: None,
             appearance: true,
             bordered: true,
             disabled: false,
@@ -91,6 +93,12 @@ impl Textarea {
 
     pub fn h(mut self, height: impl Into<DefiniteLength>) -> Self {
         self.height = Some(height.into());
+        self
+    }
+
+    /// Overrides the inner text inset without moving the frame or its scrollbar.
+    pub fn content_padding(mut self, padding: gpui::Edges<gpui::Pixels>) -> Self {
+        self.content_padding = Some(padding);
         self
     }
 
@@ -195,6 +203,9 @@ impl Textarea {
             })
             .when_some(self.token_hover_listener, |this, listener| {
                 this.on_token_hover(move |event, window, cx| listener(event, window, cx))
+            })
+            .when_some(self.content_padding, |this, padding| {
+                this.content_padding(padding)
             })
             .appearance(self.appearance)
             .bordered(self.bordered)

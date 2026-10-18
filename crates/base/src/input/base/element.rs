@@ -187,7 +187,7 @@ impl EditorScrollbarLayout {
             ),
             scroll_size: size(
                 scroll_size.width - left + paddings.right + RIGHT_MARGIN,
-                scroll_size.height,
+                scroll_size.height + paddings.top + paddings.bottom,
             ),
         }
     }
@@ -1097,7 +1097,10 @@ impl<M: InputModeKind> TextElement<M> {
         let total_lines = text.lines_len();
         // Reserve three digits for small documents, then follow the actual
         // line count up to seven digits.
-        let line_number_len = line_number_len(total_lines);
+        let last_number = state
+            .line_number_start
+            .saturating_add(total_lines.saturating_sub(1));
+        let line_number_len = line_number_len(last_number);
 
         let mut line_number_width = if state.mode.line_number() {
             let empty_line_number = window.text_system().shape_line(
@@ -2931,7 +2934,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             {
                 let line_no: SharedString = format!(
                     "{:>width$}",
-                    displayed_line_number(buffer_line + 1),
+                    displayed_line_number(state.line_number_start.saturating_add(buffer_line)),
                     width = line_number_len
                 )
                 .into();
@@ -3646,6 +3649,30 @@ mod tests {
     }
 
     #[gpui::test]
+    fn source_line_origin_expands_the_gutter_without_changing_buffer_coordinates(
+        cx: &mut TestAppContext,
+    ) {
+        let (editor, window) = decoration_editor(cx, "first\nsecond", false);
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            let cursor = editor.read(cx).cursor_position();
+            let ordinary_width = editor
+                .read(cx)
+                .last_layout
+                .as_ref()
+                .unwrap()
+                .line_number_width;
+            editor.update(cx, |state, cx| state.set_line_number_start(9_999, cx));
+            window.draw(cx).clear(cx);
+            let state = editor.read(cx);
+            assert!(state.last_layout.as_ref().unwrap().line_number_width > ordinary_width);
+            assert_eq!(state.text.to_string(), "first\nsecond");
+            assert_eq!(state.cursor_position(), cursor);
+        });
+    }
+
+    #[gpui::test]
     fn selection_paths_follow_the_input_and_its_menu_focus(cx: &mut TestAppContext) {
         let (editor, window) = decoration_editor(cx, "alpha beta", false);
         let mut cx = VisualTestContext::from_window(window.into(), cx);
@@ -4329,7 +4356,7 @@ mod tests {
             layout.bounds,
             Bounds::new(point(px(51.), px(18.)), size(px(262.), px(87.)))
         );
-        assert_eq!(layout.scroll_size, size(px(972.), px(200.)));
+        assert_eq!(layout.scroll_size, size(px(972.), px(207.)));
 
         let layout_without_gutter =
             EditorScrollbarLayout::new(input_bounds, px(0.), size(px(500.), px(120.)), paddings);
@@ -4338,7 +4365,7 @@ mod tests {
             layout_without_gutter.bounds,
             Bounds::new(point(px(10.), px(18.)), size(px(303.), px(87.)))
         );
-        assert_eq!(layout_without_gutter.scroll_size, size(px(513.), px(120.)));
+        assert_eq!(layout_without_gutter.scroll_size, size(px(513.), px(127.)));
     }
 
     #[test]

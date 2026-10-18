@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, DefiniteLength, Entity, IntoElement, RenderOnce, SharedString, StyleRefinement, Styled,
-    Window, prelude::FluentBuilder as _, relative,
+    App, DefiniteLength, Entity, IntoElement, Pixels, RenderOnce, SharedString, StyleRefinement,
+    Styled, Window, prelude::FluentBuilder as _, relative,
 };
 
 use super::{EditorState, Input};
@@ -19,6 +19,7 @@ pub struct Editor {
     state: Entity<EditorState>,
     style: StyleRefinement,
     height: Option<DefiniteLength>,
+    content_padding: Option<gpui::Edges<Pixels>>,
     appearance: bool,
     bordered: bool,
     disabled: bool,
@@ -41,6 +42,7 @@ impl Editor {
             state: state.clone(),
             style: StyleRefinement::default(),
             height: None,
+            content_padding: None,
             appearance: true,
             bordered: true,
             disabled: false,
@@ -55,6 +57,13 @@ impl Editor {
 
     pub fn h(mut self, height: impl Into<DefiniteLength>) -> Self {
         self.height = Some(height.into());
+        self
+    }
+
+    /// Reserves space inside the text viewport while keeping the scrollbar at the frame edge.
+    /// When unset, the component size supplies the ordinary content inset.
+    pub fn content_padding(mut self, padding: gpui::Edges<Pixels>) -> Self {
+        self.content_padding = Some(padding);
         self
     }
 
@@ -143,6 +152,9 @@ impl RenderOnce for Editor {
             .font_family(cx.theme().mono_font_family.clone())
             .text_size(cx.theme().mono_font_size)
             .line_height(relative(EDITOR_LINE_HEIGHT))
+            .when_some(self.content_padding, |this, padding| {
+                this.content_padding(padding)
+            })
             .appearance(self.appearance)
             .bordered(self.bordered)
             .focus_bordered(false)
@@ -174,7 +186,7 @@ mod tests {
     struct Harness {
         state: Entity<EditorState>,
         /// A text size set on the editor, as `.text_sm()` would.
-        text_size: Option<Pixels>,
+        text_size: Option<gpui::Edges<Pixels>>,
     }
 
     impl Render for Harness {
@@ -187,7 +199,7 @@ mod tests {
     }
 
     /// The row height the editor laid out with, which follows its font size.
-    fn line_height(cx: &mut TestAppContext, text_size: Option<Pixels>) -> Pixels {
+    fn line_height(cx: &mut TestAppContext, text_size: Option<gpui::Edges<Pixels>>) -> Pixels {
         cx.update(crate::init);
         let mut state = None;
         let (_, cx) = cx.add_window_view(|window, cx| {

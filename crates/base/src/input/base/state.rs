@@ -493,6 +493,7 @@ pub struct InputBaseState<M: InputModeKind> {
     /// The unwrapped width of the longest line and what it was measured for.
     pub(super) longest_line_width: Cell<Option<(LongestLineKey, Pixels)>>,
     pub(super) editor_paddings: Edges<Pixels>,
+    pub(super) line_number_start: usize,
     /// The style this state paints with: what was projected onto it, with
     /// every colour left unset resolved from the palette that is current. It
     /// is rebuilt at the top of every render, which is what keeps it current
@@ -857,6 +858,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             editor_scrollbar_snapshot: Cell::new(None),
             longest_line_width: Cell::new(None),
             editor_paddings: Edges::default(),
+            line_number_start: 1,
             deferred_scroll_offset: None,
             placeholder: SharedString::default(),
             mask_pattern: MaskPattern::default(),
@@ -8721,7 +8723,10 @@ mod tests {
                 assert!(!state.disabled);
                 assert_eq!(state.selected_range(), 0..9);
                 assert_eq!(state.value(), "generated log\n");
-                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "generated");
+                assert_eq!(
+                    cx.read_from_clipboard().unwrap().text().unwrap(),
+                    "generated"
+                );
             });
         });
     }
@@ -11314,6 +11319,22 @@ impl InputBaseState<crate::input::EditorMode> {
             *l = line_number;
         }
         self
+    }
+
+    /// Starts gutter numbering at this one-based source line, without changing the text.
+    /// Zero is treated as one. The default is one.
+    pub fn line_number_start(mut self, start: usize) -> Self {
+        self.line_number_start = start.max(1);
+        self
+    }
+
+    /// Changes the one-based source line shown for the first buffer line.
+    pub fn set_line_number_start(&mut self, start: usize, cx: &mut Context<Self>) {
+        let start = start.max(1);
+        if self.line_number_start != start {
+            self.line_number_start = start;
+            cx.notify();
+        }
     }
 
     /// Set line number.

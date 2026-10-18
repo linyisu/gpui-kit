@@ -119,6 +119,7 @@ pub struct Input {
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
     height: Option<DefiniteLength>,
+    content_padding: Option<gpui::Edges<Pixels>>,
     appearance: bool,
     cleanable: bool,
     mask_toggle: bool,
@@ -222,6 +223,11 @@ impl Input {
         Self::with_state(state.into())
     }
 
+    pub(crate) fn content_padding(mut self, padding: gpui::Edges<Pixels>) -> Self {
+        self.content_padding = Some(padding);
+        self
+    }
+
     fn with_state(state: TextInputState) -> Self {
         Self {
             id: None,
@@ -231,6 +237,7 @@ impl Input {
             prefix: None,
             suffix: None,
             height: None,
+            content_padding: None,
             appearance: true,
             cleanable: false,
             mask_toggle: false,
@@ -590,7 +597,7 @@ impl RenderOnce for Input {
         );
         state.set_editor_paddings(
             if state.presentation(cx).is_multi_line() {
-                Edges {
+                self.content_padding.unwrap_or_else(|| Edges {
                     top: self.size.input_py(),
                     right: self.size.input_px(),
                     bottom: self.size.input_py(),
@@ -599,7 +606,7 @@ impl RenderOnce for Input {
                     } else {
                         self.size.input_px()
                     },
-                }
+                })
             } else {
                 Edges::default()
             },
