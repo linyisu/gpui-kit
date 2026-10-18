@@ -230,6 +230,9 @@ pub(super) struct Inline {
     /// The shaped text is in the table, not in `styled_text`, until paint
     /// takes it back.
     handed_over: bool,
+    /// A fragment of an editor leaf laid out by `InlineFlow`: the leaf's key
+    /// and the leaf byte offset of this text's index 0.
+    editor_piece: Option<(u64, usize)>,
 
     state: Arc<Mutex<InlineState>>,
 }
@@ -240,6 +243,10 @@ pub(crate) struct InlineState {
     /// The text that actually rendering, matched with selection.
     pub(super) text: SharedString,
     pub(super) selection: Option<Selection>,
+    /// Set only through the editor host API (`Paragraph::with_leaf_key`):
+    /// the leaf reports its geometry to the collector installed by
+    /// `editor_host::collect_leaf_geometry`. `None` for every plain `TextView`.
+    pub(crate) editor_key: Option<u64>,
 }
 
 /// One frame's [`StyledText`], kept for the next frame's [`Inline`] of the
@@ -318,6 +325,37 @@ impl InlineState {
 }
 
 impl Inline {
+    /// Editor seam (design D3): report this leaf's layout and take the
+    /// editor's backgrounds. Inert unless the state carries an editor key
+    /// and an editor sink is installed.
+    fn report_to_editor(&mut self) {
+        // The sink (a thread-local read) is checked first: outside an
+        // editor's prepaint no lock is taken.
+        let Some(sink) = super::editor_seam::current() else {
+            return;
+        };
+        if let Some((key, start)) = self.editor_piece {
+            let layout = self.styled_text.layout();
+            let end = start + layout.len();
+            sink.report_text_piece(key, start, layout);
+            self.range_backgrounds
+                .extend(
+                    sink.backgrounds(key)
+                        .into_iter()
+                        .filter_map(|(range, color)| {
+                            let (lo, hi) = (range.start.max(start), range.end.min(end));
+                            (lo < hi).then(|| (lo - start..hi - start, color))
+                        }),
+                );
+            return;
+        }
+        let Some(key) = self.state.lock().ok().and_then(|state| state.editor_key) else {
+            return;
+        };
+        sink.report(key, self.styled_text.layout());
+        self.range_backgrounds.extend(sink.backgrounds(key));
+    }
+
     /// Hands the shaped text to the next frame (see [`RetainedLayout`]).
     /// Called after prepaint, so an element that is laid out but never
     /// painted (scrolled out of view) keeps its layout too; paint takes it
@@ -388,6 +426,7 @@ impl Inline {
             link_click_handler,
             retained_key: None,
             handed_over: false,
+            editor_piece: None,
             state,
         }
     }
@@ -395,6 +434,13 @@ impl Inline {
     /// Use the resolved style captured by a deferred parent layout.
     pub(super) fn text_style(mut self, text_style: TextStyle) -> Self {
         self.text_style = Some(text_style);
+        self
+    }
+
+    /// Report this text as a fragment of the editor leaf `key`, starting at
+    /// the leaf's byte `start` (see `report_to_editor`).
+    pub(super) fn editor_piece(mut self, piece: Option<(u64, usize)>) -> Self {
+        self.editor_piece = piece;
         self
     }
 
@@ -923,6 +969,7 @@ impl Element for Inline {
         let bounds = Bounds::new(self.paint_origin.unwrap_or(bounds.origin), bounds.size);
         self.styled_text
             .prepaint(id, inspector_id, bounds, &mut (), window, cx);
+        self.report_to_editor();
 
         // Report this element's laid-out extent so an ancestor TextView with
         // `max_lines` can snap its clip to a whole-line boundary. The state
@@ -950,7 +997,7 @@ impl Element for Inline {
 
     fn paint(
         &mut self,
-        global_id: Option<&GlobalElementId>,
+        _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
@@ -971,14 +1018,14 @@ impl Element for Inline {
         if !self.range_backgrounds.is_empty() {
             self.paint_range_highlights(&text_layout, window);
         }
-        self.styled_text
-            .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
+        _ = text_layout.paint_background(window, cx);
 
         // layout selections
         let (is_selectable, is_selection, selection) =
             self.layout_selections(&text_layout, &bounds, window, cx);
 
         let Ok(mut state) = self.state.lock() else {
+            _ = text_layout.paint_foreground(window, cx);
             return;
         };
 
@@ -999,9 +1046,16 @@ impl Element for Inline {
             window.set_cursor_style(CursorStyle::IBeam, &hitbox);
         }
 
-        // link cursor pointer
-        let hovered_link =
-            Self::link_range_for_position(&text_layout, &self.links, window.mouse_position());
+        // link cursor pointer. Only text under the pointer reads where the pointer
+        // is: under GPUI's retained views, reading it makes the text depend on
+        // every pointer move, so a transcript of markdown would be drawn again
+        // whenever the pointer moved anywhere.
+        let hovered_link = hitbox
+            .is_hovered(window)
+            .then(|| {
+                Self::link_range_for_position(&text_layout, &self.links, window.mouse_position())
+            })
+            .flatten();
         if hovered_link.is_some() {
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
         }
@@ -1046,6 +1100,8 @@ impl Element for Inline {
                     .register_selection_edges(start, end);
             }
         }
+
+        _ = text_layout.paint_foreground(window, cx);
 
         if is_selectable {
             if let Some(text_view_state) = GlobalState::global(cx).text_view_state() {
