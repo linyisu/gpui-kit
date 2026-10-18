@@ -407,3 +407,5 @@ application recognizer; without one, `SpeechButton` renders nothing. The
 [SpeechError]: https://docs.rs/gpui-component/latest/gpui_component/speech/enum.SpeechError.html
 [SystemRecognizer]: https://docs.rs/gpui-component/latest/gpui_component/speech/struct.SystemRecognizer.html
 [Microphone]: https://docs.rs/gpui-component/latest/gpui_component/speech/struct.Microphone.html
+
+Use `SpeechWaveform::new(&speech).live()` for immediate microphone feedback: after 320 ms of silence or missing audio it settles to the baseline. Resumed speech starts fresh; the default waveform retains its rolling history.

@@ -334,3 +334,5 @@ Linux 没有系统识别器，只有在应用提供识别器时才能使用语�
 [SpeechError]: https://docs.rs/gpui-component/latest/gpui_component/speech/enum.SpeechError.html
 [SystemRecognizer]: https://docs.rs/gpui-component/latest/gpui_component/speech/struct.SystemRecognizer.html
 [Microphone]: https://docs.rs/gpui-component/latest/gpui_component/speech/struct.Microphone.html
+
+使用 `SpeechWaveform::new(&speech).live()` 展示即时麦克风反馈：持续静音或音频中断 320 ms 后回到基线，恢复说话后只展示新的音量。默认波形继续保留滚动历史。

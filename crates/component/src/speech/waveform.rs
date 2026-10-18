@@ -30,6 +30,7 @@ const GAP_RATIO: f32 = 2.5;
 pub struct SpeechWaveform {
     state: Entity<SpeechState>,
     size: Size,
+    live: bool,
     style: StyleRefinement,
 }
 
@@ -39,8 +40,16 @@ impl SpeechWaveform {
         Self {
             state: state.clone(),
             size: Size::default(),
+            live: false,
             style: StyleRefinement::default(),
         }
+    }
+
+    /// Settle to the baseline after 320 ms of silence or missing input.
+    /// Resumed speech shows fresh levels without restoring the old peaks.
+    pub fn live(mut self) -> Self {
+        self.live = true;
+        self
     }
 
     fn height(&self) -> Pixels {
@@ -76,17 +85,22 @@ impl RenderOnce for SpeechWaveform {
         let gap = (bar * GAP_RATIO).round();
         let state = self.state.read(cx);
         let capturing = state.status().is_capturing();
-        let levels: Vec<f32> = state.levels().collect();
+        let now = Instant::now();
+        let levels: Vec<f32> = if self.live {
+            state.live_levels_at(now).collect()
+        } else {
+            state.levels().collect()
+        };
         let animate = capturing && !cx.reduce_motion();
         // The bars follow an even clock rather than the arrival of each level,
         // which comes in uneven bursts: the newest bar slides in from just past
         // the trailing edge, so the waveform scrolls without stepping or
         // stalling. Without animation the newest bar sits at the edge.
         let scroll = state
-            .level_lead_at(Instant::now())
+            .level_lead_at(now)
             .filter(|_| animate)
             .map_or(0., |lead| -lead);
-        if animate {
+        if animate || (capturing && self.live) {
             window.request_animation_frame();
         }
         let color = if capturing {

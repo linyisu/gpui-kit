@@ -46,11 +46,17 @@ const ATTACK: f32 = 0.85;
 /// fall back smoothly.
 const RELEASE: f32 = 0.3;
 
+const LIVE_QUIET_INTERVALS: usize = 4;
+const LIVE_INPUT_TIMEOUT: Duration = Duration::from_millis(320);
+
 /// Turns a stream of PCM into smoothed input levels, one per
 /// [`LEVEL_INTERVAL`] of audio, carrying partial intervals across pushes.
 pub(super) struct LevelMeter {
     /// Samples per level: [`LEVEL_INTERVAL`] at the stream's rate and channels.
     window: usize,
+    quiet_intervals: usize,
+    live_frontier: u64,
+    last_input: Option<Instant>,
     sum: f64,
     count: usize,
     smoothed: f32,
@@ -69,6 +75,9 @@ impl LevelMeter {
     pub(super) fn new() -> Self {
         Self {
             window: window_for(16_000, 1),
+            quiet_intervals: 0,
+            live_frontier: 0,
+            last_input: None,
             sum: 0.,
             count: 0,
             smoothed: 0.,
@@ -94,6 +103,16 @@ impl LevelMeter {
 
     /// [`Self::push`] with the time the samples arrived.
     pub(super) fn push_at(&mut self, samples: &[i16], now: Instant) -> bool {
+        if samples.is_empty() {
+            return false;
+        }
+        if self
+            .last_input
+            .is_some_and(|last| now.saturating_duration_since(last) >= LIVE_INPUT_TIMEOUT)
+        {
+            self.live_frontier = self.recorded;
+        }
+        self.last_input = Some(now);
         let mut recorded = false;
         for &sample in samples {
             let sample = sample as f64 / i16::MAX as f64;
@@ -109,6 +128,14 @@ impl LevelMeter {
                 self.sum = 0.;
                 self.count = 0;
                 self.recorded += 1;
+                self.quiet_intervals = if raw == 0. {
+                    self.quiet_intervals.saturating_add(1)
+                } else {
+                    0
+                };
+                if self.quiet_intervals >= LIVE_QUIET_INTERVALS {
+                    self.live_frontier = self.recorded;
+                }
                 self.align_playhead(now);
                 recorded = true;
             }
@@ -147,6 +174,20 @@ impl LevelMeter {
         // Never draw past the newest level, and never fall so far behind that a
         // burst of levels stays hidden.
         Some(lead.clamp(0., PLAYHEAD_MAX_LEAD))
+    }
+
+    pub(super) fn live_levels_at(&self, now: Instant) -> impl ExactSizeIterator<Item = f32> + '_ {
+        let stale = self
+            .last_input
+            .is_none_or(|last| now.saturating_duration_since(last) >= LIVE_INPUT_TIMEOUT);
+        let first = self.recorded - self.levels.len() as u64;
+        self.levels.iter().enumerate().map(move |(index, &level)| {
+            if stale || first + (index as u64) < self.live_frontier {
+                0.
+            } else {
+                level
+            }
+        })
     }
 
     pub(super) fn levels(&self) -> impl ExactSizeIterator<Item = f32> + '_ {
@@ -205,6 +246,39 @@ mod tests {
         (0..len)
             .map(|ix| if ix % 2 == 0 { amplitude } else { -amplitude })
             .collect()
+    }
+
+    #[test]
+    fn live_levels_clear_after_silence_and_only_new_speech_returns() {
+        let mut meter = LevelMeter::new();
+        let start = Instant::now();
+        let window = window_for(16_000, 1);
+        meter.push_at(&tone(8_000, window), start);
+        assert!(meter.live_levels_at(start).any(|level| level > 0.));
+        for index in 1..=4 {
+            meter.push_at(&vec![0; window], start + LEVEL_INTERVAL * index);
+        }
+        let quiet = start + LEVEL_INTERVAL * 4;
+        assert!(meter.live_levels_at(quiet).all(|level| level == 0.));
+        assert!(meter.levels().any(|level| level > 0.));
+        meter.push_at(&tone(8_000, window), quiet + LEVEL_INTERVAL);
+        let levels: Vec<_> = meter.live_levels_at(quiet + LEVEL_INTERVAL).collect();
+        assert!(levels[..levels.len() - 1].iter().all(|&level| level == 0.));
+        assert!(*levels.last().unwrap() > 0.);
+    }
+
+    #[test]
+    fn live_levels_expire_when_input_stalls() {
+        let mut meter = LevelMeter::new();
+        let start = Instant::now();
+        let samples = tone(8_000, window_for(16_000, 1));
+        meter.push_at(&samples, start);
+        let later = start + LIVE_INPUT_TIMEOUT;
+        assert!(meter.live_levels_at(later).all(|level| level == 0.));
+        meter.push_at(&samples, later);
+        let levels: Vec<_> = meter.live_levels_at(later).collect();
+        assert_eq!(levels[0], 0.);
+        assert!(levels[1] > 0.);
     }
 
     #[test]

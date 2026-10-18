@@ -172,6 +172,13 @@ impl SpeechState {
         self.meter.levels()
     }
 
+    pub(super) fn live_levels_at(
+        &self,
+        now: instant::Instant,
+    ) -> impl ExactSizeIterator<Item = f32> + '_ {
+        self.meter.live_levels_at(now)
+    }
+
     /// How far past the waveform's trailing edge the newest level sits at
     /// `now`, in levels; see `LevelMeter::lead_at`.
     pub(super) fn level_lead_at(&self, now: instant::Instant) -> Option<f32> {
