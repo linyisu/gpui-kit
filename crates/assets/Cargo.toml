@@ -25,7 +25,10 @@ gpui_platform.workspace = true
 gpui-fast-platform.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-rust-embed = { version = "8.7.2", features = ["interpolate-folder-path", "include-exclude"] }
+# Native Debug deployments must not depend on the build machine's checkout.
+rust-embed = { version = "8.7.2", features = [
+    "interpolate-folder-path", "include-exclude", "debug-embed",
+] }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 reqwest = { workspace = true }

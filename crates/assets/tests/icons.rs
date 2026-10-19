@@ -15,6 +15,7 @@ fn every_named_icon_is_available_in_the_asset_source() {
     assert_eq!(named, bundled);
     for path in named {
         let bytes = assets.load(&path).unwrap().unwrap();
+        assert!(matches!(bytes, std::borrow::Cow::Borrowed(_)), "{path}");
         assert!(
             std::str::from_utf8(&bytes).unwrap().contains("<svg"),
             "{path}"
@@ -70,6 +71,10 @@ fn default_assets_preserve_the_component_bundle_without_all_lucide_icons() {
     assert!(Assets::get("icons/search.svg").is_some());
     assert!(Assets::get("icons/accessibility.svg").is_none());
     for path in actual {
+        assert!(matches!(
+            Assets.load(&path).unwrap(),
+            Some(std::borrow::Cow::Borrowed(_))
+        ));
         assert_eq!(Assets.load(&path).unwrap(), AllAssets.load(&path).unwrap());
     }
     assert!(Assets.load("").unwrap().is_none());
