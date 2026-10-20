@@ -1414,7 +1414,11 @@ impl LineBreaks {
         // inside a code atom would otherwise strand each remaining character
         // on its own line when punctuation forbids a break after the atom.
         for candidates in [&self.emergency, &self.graphemes] {
-            if let Some(&index) = candidates.iter().find(fitting) {
+            if let Some(&index) = candidates
+                .iter()
+                .take_while(|&&index| index <= hard_end)
+                .find(fitting)
+            {
                 return index;
             }
         }
@@ -2642,6 +2646,14 @@ mod tests {
         }];
         let breaks = LineBreaks::new(&items, &[0..6]);
         assert_eq!(breaks.before(0, 6, text.len(), &[0..6]), "unit_7、".len());
+
+        let items = [MeasureItem::Text {
+            text: "(\n合成内容".into(),
+            links: vec![],
+            highlights: vec![],
+        }];
+        let breaks = LineBreaks::new(&items, &[]);
+        assert_eq!(breaks.before(0, 0, 1, &[]), 1);
     }
 
     #[test]
