@@ -1,6 +1,7 @@
 [workspace]
 default-members = ["crates/story"]
 members = [
+    "patches/gpui-pre-windows",
     "crates/kit",
     "crates/base",
     "crates/base/examples/wasm",
@@ -187,6 +188,7 @@ cap-std = { opt-level = 3 }
 strip = "symbols"
 
 [patch.crates-io]
+gpui-pre-windows = { path = "patches/gpui-pre-windows" }
 # LLRT's public modules still name their compatible binding dependency
 # `rquickjs`. Route those dependencies through a source-compatible facade so
 # the shell and LLRT share the exact same quickjs-jit types and VM.
