@@ -1317,7 +1317,7 @@ struct LineBreaks {
 }
 
 impl LineBreaks {
-    fn new(items: &[MeasureItem]) -> Self {
+    fn new(items: &[MeasureItem], atoms: &[Range<usize>]) -> Self {
         use unicode_linebreak::{BreakClass, break_property};
         let mut text = String::new();
         let mut offsets = vec![(0, 0)];
@@ -1325,9 +1325,21 @@ impl LineBreaks {
         for item in items {
             match item {
                 MeasureItem::Text { text: value, .. } => {
-                    for character in value.chars() {
-                        text.push(character);
-                        flow_offset += character.len_utf8();
+                    let item_start = flow_offset;
+                    for (offset, character) in value.char_indices() {
+                        let start = item_start + offset;
+                        if start < flow_offset {
+                            continue;
+                        }
+                        if let Ok(index) = atoms.binary_search_by_key(&start, |atom| atom.start) {
+                            // Code punctuation belongs to the atom, not the
+                            // surrounding prose's Unicode line-break rules.
+                            text.push('\u{fffc}');
+                            flow_offset = atoms[index].end;
+                        } else {
+                            text.push(character);
+                            flow_offset += character.len_utf8();
+                        }
                         offsets.push((text.len(), flow_offset));
                     }
                 }
@@ -1398,12 +1410,15 @@ impl LineBreaks {
                 return index;
             }
         }
-        // An overwide grapheme or punctuation group still advances; no UTF-8 or emoji split.
-        self.graphemes
-            .iter()
-            .copied()
-            .find(|&index| index > start)
-            .unwrap_or(hard_end)
+        // If no earlier boundary fits, advance one indivisible group. Starting
+        // inside a code atom would otherwise strand each remaining character
+        // on its own line when punctuation forbids a break after the atom.
+        for candidates in [&self.emergency, &self.graphemes] {
+            if let Some(&index) = candidates.iter().find(fitting) {
+                return index;
+            }
+        }
+        hard_end
     }
 }
 
@@ -1441,7 +1456,6 @@ fn line_ranges(
         .text_system()
         .line_wrapper(text_style.font(), font_size);
     let mut ranges = Vec::new();
-    let breaks = std::cell::OnceCell::new();
 
     for hard_line in hard_lines {
         if hard_line.is_empty() {
@@ -1449,6 +1463,7 @@ fn line_ranges(
             continue;
         }
         let mut item_start = 0;
+        let breaks = std::cell::OnceCell::new();
         let mut wrap_fragments = Vec::new();
         for (ix, item) in items.iter().enumerate() {
             let item_end = item_start + item.len();
@@ -1542,7 +1557,7 @@ fn line_ranges(
                 end = hard_line.end;
             }
             if end < hard_line.end {
-                end = breaks.get_or_init(|| LineBreaks::new(items)).before(
+                end = breaks.get_or_init(|| LineBreaks::new(items, &atoms)).before(
                     start,
                     end,
                     hard_line.end,
@@ -2481,6 +2496,152 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[test]
+    fn adjacent_code_atoms_wrap_without_cascading_or_overflow() {
+        use super::super::inline::test_fonts::{BODY, MONO, WideMonoTextSystem};
+        use gpui::{Empty, TestApp};
+
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        let mut window = app.open_window(|_, _| Empty);
+        window.update(|_, window, cx| {
+            for font_size in [16., 20., 24.] {
+                let style = TextStyle {
+                    font_family: BODY.into(),
+                    font_size: px(font_size).into(),
+                    ..Default::default()
+                };
+                for prefix in 1..=6 {
+                    let text = format!(
+                        "{}完成：.unit_7、.segment_8、.record_9，其余合成内容保持原样。",
+                        "生成样本".repeat(prefix)
+                    );
+                    let codes = [".unit_7", ".segment_8", ".record_9"].map(|code| {
+                        let start = text.find(code).unwrap();
+                        start..start + code.len()
+                    });
+                    let items = [MeasureItem::Text {
+                        text: text.clone().into(),
+                        links: vec![],
+                        highlights: codes
+                            .iter()
+                            .map(|range| {
+                                (
+                                    range.clone(),
+                                    InlineHighlight {
+                                        font_family: Some(MONO.into()),
+                                        font_size_scale: Some(0.875),
+                                        ..Default::default()
+                                    },
+                                )
+                            })
+                            .collect(),
+                    }];
+                    for width in (240..800).step_by(7) {
+                        let layout = layout_flow(
+                            &items,
+                            &[None],
+                            &style,
+                            Some(px(width as f32)),
+                            window,
+                            cx,
+                        );
+                        assert!(
+                            layout.size.width <= px(width as f32),
+                            "overflow at {font_size}px/{width}px: {:?}",
+                            layout.size
+                        );
+                        let rows = layout
+                            .lines
+                            .iter()
+                            .map(|(range, _)| {
+                                layout.fragments[range.clone()]
+                                    .iter()
+                                    .filter_map(|fragment| match fragment {
+                                        PositionedFragment::Text { text, .. } => {
+                                            Some(text.as_ref())
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect::<String>()
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(rows.concat(), text);
+                        assert!(rows.len() <= 8, "cascading rows: {rows:?}");
+                        for code in [".unit_7", ".segment_8", ".record_9"] {
+                            assert!(
+                                rows.iter().any(|row| row.contains(code)),
+                                "split fitting code {code}: {rows:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn fitting_inline_code_remains_whole_before_cjk_separators() {
+        use super::super::inline::test_fonts::{BODY, MONO, WideMonoTextSystem};
+        use gpui::{Empty, TestApp};
+
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        let mut window = app.open_window(|_, _| Empty);
+        window.update(|_, window, _| {
+            for font_size in [16., 20., 24.] {
+                let style = TextStyle {
+                    font_family: BODY.into(),
+                    font_size: px(font_size).into(),
+                    ..Default::default()
+                };
+                for separator in ["、", "，", "。", "）"] {
+                    let text = format!("合成说明已完成unit_7{separator}其余目录保持原样");
+                    let start = text.find("unit_7").unwrap();
+                    let code = start..start + "unit_7".len();
+                    let items = vec![MeasureItem::Text {
+                        text: text.clone().into(),
+                        links: vec![],
+                        highlights: vec![(
+                            code.clone(),
+                            InlineHighlight {
+                                font_family: Some(MONO.into()),
+                                font_size_scale: Some(0.875),
+                                ..Default::default()
+                            },
+                        )],
+                    }];
+                    for width in (160..800).step_by(3) {
+                        let ranges = line_ranges(
+                            &items,
+                            &[None],
+                            &[None],
+                            &style,
+                            Some(px(width as f32)),
+                            window,
+                        );
+                        assert!(
+                            ranges
+                                .iter()
+                                .all(|range| { !(code.start < range.end && range.end < code.end) }),
+                            "split fitting code at {font_size}px/{width}px: {ranges:?}"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn emergency_wrap_does_not_enter_an_atomic_code_span() {
+        let text = "unit_7、其余合成内容";
+        let items = [MeasureItem::Text {
+            text: text.into(),
+            links: vec![],
+            highlights: vec![],
+        }];
+        let breaks = LineBreaks::new(&items, &[0..6]);
+        assert_eq!(breaks.before(0, 6, text.len(), &[0..6]), "unit_7、".len());
     }
 
     #[test]
